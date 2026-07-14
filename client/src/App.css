@@ -41,6 +41,22 @@ button {
   margin-bottom: 16px;
 }
 
+.panel-toggle-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.panel-toggle-row h2 {
+  margin-bottom: 0;
+}
+
+.panel-toggle-button {
+  flex-shrink: 0;
+}
+
 label {
   display: block;
   margin-bottom: 8px;
@@ -236,7 +252,7 @@ textarea {
 
 .recipe-card-title-block h3 {
   margin: 0 0 8px;
-  font-size: 1.1rem;
+  font-size: 1.3rem;
 }
 
 .recipe-card-meta {
@@ -396,27 +412,52 @@ textarea {
   .recipes-panel-header,
   .section-heading,
   .recipe-section-header,
-  .recipe-card-meta,
   .modal-title-row,
   .modal-title-actions,
-  .modal-actions,
-  .recipe-card-actions {
+  .modal-actions {
     flex-direction: column;
     align-items: stretch;
   }
 
   .search-field,
-  .recipe-card-actions button,
   .section-heading button,
   .modal-actions button,
-  .modal-title-actions button,
-  .scale-controls {
+  .modal-title-actions button {
     width: 100%;
+  }
+
+  .panel-toggle-row {
+    align-items: center;
+  }
+
+  .panel-toggle-button {
+    width: auto;
+  }
+
+  .recipe-card-meta {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 10px;
+  }
+
+  .recipe-card-actions {
+    display: grid;
+    grid-template-columns: auto auto;
+    align-items: stretch;
+    justify-content: end;
+    gap: 8px;
+  }
+
+  .recipe-card-actions .edit-button {
+    min-width: 88px;
   }
 
   .scale-controls {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: 1fr 1fr;
+    width: 110px;
+    gap: 6px;
   }
 
   .editable-row,

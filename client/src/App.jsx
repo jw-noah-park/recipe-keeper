@@ -262,6 +262,7 @@ function App() {
   const [rawText, setRawText] = useState("");
   const [title, setTitle] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [isPastePanelOpen, setIsPastePanelOpen] = useState(true);
 
   const [ingredients, setIngredients] = useState([]);
   const [instructions, setInstructions] = useState([]);
@@ -628,25 +629,41 @@ function App() {
         </section>
 
         <section className="panel">
-          <h2>레시피 붙여넣기</h2>
+          <div className="panel-toggle-row">
+            <h2>레시피 붙여넣기</h2>
 
-          <label htmlFor="rawText">레시피 전체 내용</label>
+            <button
+              type="button"
+              className="ghost-button panel-toggle-button"
+              onClick={() => setIsPastePanelOpen((currentValue) => !currentValue)}
+              aria-expanded={isPastePanelOpen}
+              aria-label={isPastePanelOpen ? "레시피 붙여넣기 접기" : "레시피 붙여넣기 펼치기"}
+            >
+              {isPastePanelOpen ? "🔼" : "🔽"}
+            </button>
+          </div>
 
-          <textarea
-            id="rawText"
-            rows="16"
-            value={rawText}
-            onChange={(event) => setRawText(event.target.value)}
-            placeholder="레시피 전체를 여기에 붙여넣으세요."
-          />
+          {isPastePanelOpen && (
+            <>
+              <label htmlFor="rawText">레시피 전체 내용</label>
 
-          <button
-            type="button"
-            className="primary-button"
-            onClick={handleParseRecipe}
-          >
-            레시피 정리하기
-          </button>
+              <textarea
+                id="rawText"
+                rows="16"
+                value={rawText}
+                onChange={(event) => setRawText(event.target.value)}
+                placeholder="레시피 전체를 여기에 붙여넣으세요."
+              />
+
+              <button
+                type="button"
+                className="primary-button"
+                onClick={handleParseRecipe}
+              >
+                레시피 정리하기
+              </button>
+            </>
+          )}
         </section>
 
         {hasParsed && (
