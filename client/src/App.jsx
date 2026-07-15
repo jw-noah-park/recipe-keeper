@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { parseRecipeText } from "./utils/parseRecipeText.js";
 import "./App.css";
 
 const API_URL =
   import.meta.env.VITE_API_URL?.trim() || "http://localhost:5001/api";
+const RECIPE_VIEW_COUNTS_STORAGE_KEY = "recipe_keeper_view_counts";
 
 const FRACTION_CHAR_TO_PARTS = {
   "¼": [1, 4],
@@ -53,6 +54,25 @@ function isScalableIngredientGroup(groupName) {
   return SCALABLE_GROUP_PATTERN.test(groupName);
 }
 
+function moveArrayItem(items, fromIndex, toIndex) {
+  if (
+    fromIndex === toIndex ||
+    fromIndex < 0 ||
+    toIndex < 0 ||
+    fromIndex >= items.length ||
+    toIndex >= items.length
+  ) {
+    return items;
+  }
+
+  const nextItems = [...items];
+  const [movedItem] = nextItems.splice(fromIndex, 1);
+
+  nextItems.splice(toIndex, 0, movedItem);
+
+  return nextItems;
+}
+
 function createRecipeDraft(recipe) {
   return {
     title: recipe.title ?? "",
@@ -78,13 +98,7 @@ function matchesRecipe(recipe, query) {
     return true;
   }
 
-  const haystack = [
-    recipe.title,
-    ...(recipe.ingredients ?? []),
-    ...(recipe.instructions ?? []),
-  ]
-    .join(" ")
-    .toLowerCase();
+  const haystack = (recipe.title ?? "").toLowerCase();
 
   return haystack.includes(query);
 }
@@ -256,6 +270,28 @@ function formatScaleLabel(scale) {
   return `x${formatShortNumber(scale)}`;
 }
 
+function loadRecipeViewCounts() {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  try {
+    const storedValue = window.localStorage.getItem(
+      RECIPE_VIEW_COUNTS_STORAGE_KEY,
+    );
+
+    if (!storedValue) {
+      return {};
+    }
+
+    const parsedValue = JSON.parse(storedValue);
+
+    return parsedValue && typeof parsedValue === "object" ? parsedValue : {};
+  } catch {
+    return {};
+  }
+}
+
 function App() {
   const [recipes, setRecipes] = useState([]);
 
@@ -269,13 +305,21 @@ function App() {
 
   const [editingRecipeId, setEditingRecipeId] = useState(null);
   const [editingRecipe, setEditingRecipe] = useState(null);
+  const [openRecipeId, setOpenRecipeId] = useState(null);
   const [recipeScales, setRecipeScales] = useState({});
+  const [recipeViewCounts, setRecipeViewCounts] = useState(loadRecipeViewCounts);
 
   const [hasParsed, setHasParsed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [updatingRecipeId, setUpdatingRecipeId] = useState(null);
   const [error, setError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
+  const [titleError, setTitleError] = useState("");
+  const [editingTitleError, setEditingTitleError] = useState("");
+
+  const titleInputRef = useRef(null);
+  const editTitleInputRef = useRef(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -335,12 +379,45 @@ function App() {
   }, [editingRecipeId]);
 
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
-  const filteredRecipes = recipes.filter((recipe) =>
-    matchesRecipe(recipe, normalizedSearchQuery),
-  );
+  const filteredRecipes = [...recipes]
+    .filter((recipe) => matchesRecipe(recipe, normalizedSearchQuery))
+    .sort((leftRecipe, rightRecipe) => {
+      const leftCount = recipeViewCounts[leftRecipe.id] ?? 0;
+      const rightCount = recipeViewCounts[rightRecipe.id] ?? 0;
+
+      if (rightCount !== leftCount) {
+        return rightCount - leftCount;
+      }
+
+      return new Date(rightRecipe.created_at) - new Date(leftRecipe.created_at);
+    });
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(
+      RECIPE_VIEW_COUNTS_STORAGE_KEY,
+      JSON.stringify(recipeViewCounts),
+    );
+  }, [recipeViewCounts]);
 
   function getRecipeScale(recipeId) {
     return recipeScales[recipeId] ?? 1;
+  }
+
+  function toggleRecipeOpen(recipeId) {
+    const isOpening = openRecipeId !== recipeId;
+
+    setOpenRecipeId(isOpening ? recipeId : null);
+
+    if (isOpening) {
+      setRecipeViewCounts((currentCounts) => ({
+        ...currentCounts,
+        [recipeId]: (currentCounts[recipeId] ?? 0) + 1,
+      }));
+    }
   }
 
   function increaseRecipeScale(recipeId) {
@@ -376,15 +453,19 @@ function App() {
   function handleParseRecipe() {
     if (!rawText.trim()) {
       setError("레시피 원문을 붙여넣어 주세요.");
+      setSuccessMessage("");
       return;
     }
 
     const parsedRecipe = parseRecipeText(rawText);
 
+    setTitle(parsedRecipe.title ?? "");
     setIngredients(parsedRecipe.ingredients);
     setInstructions(parsedRecipe.instructions);
     setHasParsed(true);
     setError("");
+    setSuccessMessage("");
+    setTitleError("");
   }
 
   function handleIngredientChange(index, value) {
@@ -404,6 +485,12 @@ function App() {
       currentIngredients.filter(
         (_, ingredientIndex) => ingredientIndex !== index,
       ),
+    );
+  }
+
+  function moveIngredient(index, direction) {
+    setIngredients((currentIngredients) =>
+      moveArrayItem(currentIngredients, index, index + direction),
     );
   }
 
@@ -428,6 +515,10 @@ function App() {
   }
 
   function updateEditingRecipeField(field, value) {
+    if (field === "title") {
+      setEditingTitleError("");
+    }
+
     setEditingRecipe((currentRecipe) => ({
       ...currentRecipe,
       [field]: value,
@@ -455,6 +546,17 @@ function App() {
       ...currentRecipe,
       ingredients: currentRecipe.ingredients.filter(
         (_, ingredientIndex) => ingredientIndex !== index,
+      ),
+    }));
+  }
+
+  function moveEditingIngredient(index, direction) {
+    setEditingRecipe((currentRecipe) => ({
+      ...currentRecipe,
+      ingredients: moveArrayItem(
+        currentRecipe.ingredients,
+        index,
+        index + direction,
       ),
     }));
   }
@@ -489,6 +591,8 @@ function App() {
     setEditingRecipeId(recipe.id);
     setEditingRecipe(createRecipeDraft(recipe));
     setError("");
+    setSuccessMessage("");
+    setEditingTitleError("");
   }
 
   function cancelEditingRecipe() {
@@ -502,22 +606,29 @@ function App() {
     setIngredients([]);
     setInstructions([]);
     setHasParsed(false);
+    setTitleError("");
   }
 
   async function handleSaveRecipe() {
     if (!title.trim()) {
-      setError("레시피 제목을 입력해 주세요.");
+      setTitleError("레시피 제목을 입력해 주세요.");
+      setError("");
+      setSuccessMessage("");
+      titleInputRef.current?.focus();
       return;
     }
 
     if (!rawText.trim()) {
       setError("레시피 원문이 없습니다.");
+      setSuccessMessage("");
       return;
     }
 
     try {
       setSaving(true);
       setError("");
+      setSuccessMessage("");
+      setTitleError("");
 
       const response = await fetch(`${API_URL}/recipes`, {
         method: "POST",
@@ -540,9 +651,12 @@ function App() {
 
       setRecipes((currentRecipes) => [result.data, ...currentRecipes]);
 
+      setSuccessMessage(`"${result.data.title}" 레시피가 저장되었습니다.`);
+      window.alert(`"${result.data.title}" 레시피가 저장되었습니다.`);
       resetForm();
     } catch (error) {
       setError(error.message);
+      setSuccessMessage("");
     } finally {
       setSaving(false);
     }
@@ -550,13 +664,18 @@ function App() {
 
   async function handleUpdateRecipe(recipeId) {
     if (!editingRecipe.title.trim()) {
-      setError("레시피 제목을 입력해 주세요.");
+      setEditingTitleError("레시피 제목을 입력해 주세요.");
+      setError("");
+      setSuccessMessage("");
+      editTitleInputRef.current?.focus();
       return;
     }
 
     try {
       setUpdatingRecipeId(recipeId);
       setError("");
+      setSuccessMessage("");
+      setEditingTitleError("");
 
       const response = await fetch(`${API_URL}/recipes/${recipeId}`, {
         method: "PATCH",
@@ -583,9 +702,12 @@ function App() {
         ),
       );
 
+      setSuccessMessage(`"${result.data.title}" 레시피가 수정되었습니다.`);
+      window.alert(`"${result.data.title}" 레시피가 수정되었습니다.`);
       cancelEditingRecipe();
     } catch (error) {
       setError(error.message);
+      setSuccessMessage("");
     } finally {
       setUpdatingRecipeId(null);
     }
@@ -606,27 +728,7 @@ function App() {
     <>
       <main className="app">
         {error && <p className="error-message">{error}</p>}
-
-        <section className="panel search-panel">
-          <div className="recipes-panel-header">
-            <div className="search-field search-field-wide">
-              <label htmlFor="recipe-search" className="visually-hidden">
-                레시피 검색
-              </label>
-              <input
-                id="recipe-search"
-                type="search"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="제목, 재료, 조리 순서 검색"
-              />
-            </div>
-
-            <p className="recipes-count">
-              {loading ? "불러오는 중..." : `${filteredRecipes.length}개 표시 중`}
-            </p>
-          </div>
-        </section>
+        {successMessage && <p className="success-message">{successMessage}</p>}
 
         <section className="panel">
           <div className="panel-toggle-row">
@@ -639,7 +741,14 @@ function App() {
               aria-expanded={isPastePanelOpen}
               aria-label={isPastePanelOpen ? "레시피 붙여넣기 접기" : "레시피 붙여넣기 펼치기"}
             >
-              {isPastePanelOpen ? "🔼" : "🔽"}
+              <span
+                className={`panel-toggle-button-icon${
+                  isPastePanelOpen ? " panel-toggle-button-icon-open" : ""
+                }`}
+                aria-hidden="true"
+              >
+                ^
+              </span>
             </button>
           </div>
 
@@ -666,20 +775,60 @@ function App() {
           )}
         </section>
 
+        <section className="panel search-panel">
+          <div className="recipes-panel-header">
+            <div className="search-field search-field-wide">
+              <label htmlFor="recipe-search" className="visually-hidden">
+                레시피 검색
+              </label>
+              <input
+                id="recipe-search"
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="레시피 제목 검색"
+              />
+            </div>
+
+            <p className="recipes-count">
+              {loading ? "불러오는 중..." : `${filteredRecipes.length}개 표시 중`}
+            </p>
+          </div>
+        </section>
+
         {hasParsed && (
           <section className="panel">
-            <h2>정리 결과</h2>
+            <div className="panel-title-row">
+              <h2>정리 결과</h2>
+
+              <button
+                type="button"
+                className="save-button save-button-inline"
+                onClick={handleSaveRecipe}
+                disabled={saving}
+              >
+                {saving ? "저장 중..." : "저장"}
+              </button>
+            </div>
 
             <div className="field">
               <label htmlFor="title">레시피 제목</label>
 
               <input
+                ref={titleInputRef}
                 id="title"
                 type="text"
                 value={title}
-                onChange={(event) => setTitle(event.target.value)}
+                onChange={(event) => {
+                  setTitle(event.target.value);
+                  setTitleError("");
+                }}
+                className={titleError ? "input-invalid" : ""}
+                aria-invalid={titleError ? "true" : "false"}
                 placeholder="예: 막김치"
               />
+
+              {titleError && <p className="field-error-text">{titleError}</p>}
             </div>
 
             <div className="result-section">
@@ -711,13 +860,35 @@ function App() {
                       }
                     />
 
-                    <button
-                      type="button"
-                      className="ghost-button"
-                      onClick={() => removeIngredient(index)}
-                    >
-                      삭제
-                    </button>
+                    <div className="row-action-group">
+                      <button
+                        type="button"
+                        className="ghost-button row-move-button"
+                        onClick={() => moveIngredient(index, -1)}
+                        disabled={index === 0}
+                        aria-label="재료 위로 이동"
+                      >
+                        ↑
+                      </button>
+
+                      <button
+                        type="button"
+                        className="ghost-button row-move-button"
+                        onClick={() => moveIngredient(index, 1)}
+                        disabled={index === ingredients.length - 1}
+                        aria-label="재료 아래로 이동"
+                      >
+                        ↓
+                      </button>
+
+                      <button
+                        type="button"
+                        className="ghost-button ingredient-delete-button"
+                        onClick={() => removeIngredient(index)}
+                      >
+                        삭제
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
@@ -785,15 +956,49 @@ function App() {
             <p>검색 결과가 없습니다.</p>
           ) : (
             <div className="recipe-list">
-              {filteredRecipes.map((recipe) => {
+              {filteredRecipes.map((recipe, index) => {
                 const scale = getRecipeScale(recipe.id);
+                const isRecipeOpen = openRecipeId === recipe.id;
+                const recipeViewCount = recipeViewCounts[recipe.id] ?? 0;
 
                 return (
-                  <article className="recipe-card" key={recipe.id}>
-                    <div className="recipe-card-header">
-                      <div className="recipe-card-title-block">
-                        <h3>{recipe.title}</h3>
+                  <article
+                    className={`recipe-card${
+                      isRecipeOpen ? " recipe-card-open" : ""
+                    }`}
+                    key={recipe.id}
+                  >
+                    <button
+                      type="button"
+                      className="recipe-card-toggle"
+                      onClick={() => toggleRecipeOpen(recipe.id)}
+                      aria-expanded={isRecipeOpen}
+                    >
+                      <span className="recipe-card-index">
+                        {String(index + 1).padStart(2, "0")}
+                      </span>
 
+                      <span className="recipe-card-title-block">
+                        <span className="recipe-card-title">{recipe.title}</span>
+                      </span>
+
+                      <span className="recipe-card-toggle-trailing">
+                        <span className="recipe-card-view-count">
+                          {recipeViewCount}
+                        </span>
+                        <span
+                          className={`recipe-card-toggle-icon${
+                            isRecipeOpen ? " recipe-card-toggle-icon-open" : ""
+                          }`}
+                          aria-hidden="true"
+                        >
+                          +
+                        </span>
+                      </span>
+                    </button>
+
+                    {isRecipeOpen && (
+                      <div className="recipe-card-body">
                         <div className="recipe-card-meta">
                           <div className="recipe-meta-texts">
                             <p className="recipe-scale-text">
@@ -831,54 +1036,52 @@ function App() {
                             </button>
                           </div>
                         </div>
-                      </div>
-                    </div>
 
-                    <div className="recipe-card-body">
-                      <div className="recipe-section-header">
-                        <h4>재료</h4>
-                      </div>
+                        <div className="recipe-section-header">
+                          <h4>재료</h4>
+                        </div>
 
-                      {recipe.ingredients?.length > 0 ? (
-                        <ul className="ingredient-list">
-                          {recipe.ingredients.map((ingredient, index) => {
-                            const scaledIngredient = scaleIngredientText(
-                              ingredient,
-                              scale,
-                            );
-                            const { group, text } =
-                              splitIngredientLabel(scaledIngredient);
+                        {recipe.ingredients?.length > 0 ? (
+                          <ul className="ingredient-list">
+                            {recipe.ingredients.map((ingredient, ingredientIndex) => {
+                              const scaledIngredient = scaleIngredientText(
+                                ingredient,
+                                scale,
+                              );
+                              const { group, text } =
+                                splitIngredientLabel(scaledIngredient);
 
-                            return (
-                              <li key={index} className="ingredient-item">
-                                {group && (
-                                  <span className="ingredient-group">{group}</span>
-                                )}
-                                <span>{text}</span>
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      ) : (
-                        <p>분리된 재료가 없습니다.</p>
-                      )}
-
-                      <details className="recipe-details">
-                        <summary>조리 순서 보기</summary>
-
-                        <h4>조리 순서</h4>
-
-                        {recipe.instructions?.length > 0 ? (
-                          <ol>
-                            {recipe.instructions.map((instruction, index) => (
-                              <li key={index}>{instruction}</li>
-                            ))}
-                          </ol>
+                              return (
+                                <li key={ingredientIndex} className="ingredient-item">
+                                  {group && (
+                                    <span className="ingredient-group">{group}</span>
+                                  )}
+                                  <span>{text}</span>
+                                </li>
+                              );
+                            })}
+                          </ul>
                         ) : (
-                          <p>분리된 조리 순서가 없습니다.</p>
+                          <p>분리된 재료가 없습니다.</p>
                         )}
-                      </details>
-                    </div>
+
+                        <details className="recipe-details">
+                          <summary>조리 순서 보기</summary>
+
+                          <h4>조리 순서</h4>
+
+                          {recipe.instructions?.length > 0 ? (
+                            <ol>
+                              {recipe.instructions.map((instruction, instructionIndex) => (
+                                <li key={instructionIndex}>{instruction}</li>
+                              ))}
+                            </ol>
+                          ) : (
+                            <p>분리된 조리 순서가 없습니다.</p>
+                          )}
+                        </details>
+                      </div>
+                    )}
                   </article>
                 );
               })}
@@ -904,14 +1107,21 @@ function App() {
               <div className="field modal-title-field">
                 <label htmlFor="edit-title">레시피 제목</label>
                 <input
+                  ref={editTitleInputRef}
                   id="edit-title"
                   type="text"
                   value={editingRecipe.title}
                   onChange={(event) =>
                     updateEditingRecipeField("title", event.target.value)
                   }
+                  className={editingTitleError ? "input-invalid" : ""}
+                  aria-invalid={editingTitleError ? "true" : "false"}
                   placeholder="레시피 제목"
                 />
+
+                {editingTitleError && (
+                  <p className="field-error-text">{editingTitleError}</p>
+                )}
               </div>
 
               <div className="modal-title-actions">
@@ -972,13 +1182,37 @@ function App() {
                       }
                     />
 
-                    <button
-                      type="button"
-                      className="ghost-button"
-                      onClick={() => removeEditingIngredient(index)}
-                    >
-                      삭제
-                    </button>
+                    <div className="row-action-group">
+                      <button
+                        type="button"
+                        className="ghost-button row-move-button"
+                        onClick={() => moveEditingIngredient(index, -1)}
+                        disabled={index === 0}
+                        aria-label="재료 위로 이동"
+                      >
+                        ↑
+                      </button>
+
+                      <button
+                        type="button"
+                        className="ghost-button row-move-button"
+                        onClick={() => moveEditingIngredient(index, 1)}
+                        disabled={
+                          index === editingRecipe.ingredients.length - 1
+                        }
+                        aria-label="재료 아래로 이동"
+                      >
+                        ↓
+                      </button>
+
+                      <button
+                        type="button"
+                        className="ghost-button ingredient-delete-button"
+                        onClick={() => removeEditingIngredient(index)}
+                      >
+                        삭제
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>

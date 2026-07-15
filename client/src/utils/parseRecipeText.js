@@ -19,6 +19,9 @@ const COOKING_VERB_PATTERN =
 const QUANTITY_HINT_PATTERN =
   /(?:\d+(?:\.\d+)?(?:\/\d+)?|\d+\s+\d\/\d|[¼½¾⅓⅔⅛⅜⅝⅞]|한|두|세|네|반|약간|적당량|조금|소량)\s*(?:g|kg|mg|ml|l|cc|컵|공기|큰술|작은술|숟가락|스푼|국자|tsp|tbsp|ts|tb|개|장|줄|쪽|알|봉|팩|캔|줌|꼬집|인분|slice|slices|cup|cups|teaspoon|teaspoons|tablespoon|tablespoons|clove|cloves)?/i;
 
+const TITLE_PREFIX_PATTERN =
+  /^(?:레시피\s*제목|제목|요리명|메뉴명|recipe(?:\s*name)?|title)\s*[:：-]\s*(.+)$/i;
+
 function normalizeText(text) {
   return text
     .replace(/\u00a0/g, " ")
@@ -72,6 +75,29 @@ function isIngredientHeading(line) {
   return INGREDIENT_HEADING_PATTERN.test(line.trim());
 }
 
+function looksLikeIngredientList(line) {
+  const normalizedLine = stripListMarker(line).trim();
+
+  if (!normalizedLine.includes(",")) {
+    return false;
+  }
+
+  const items = normalizedLine
+    .split(/\s*,\s*/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (items.length < 2) {
+    return false;
+  }
+
+  const quantityItemCount = items.filter((item) =>
+    QUANTITY_HINT_PATTERN.test(item),
+  ).length;
+
+  return quantityItemCount >= 2 || items.length >= 4;
+}
+
 function isLikelyInstructionLine(line) {
   const normalizedLine = line.trim();
 
@@ -89,6 +115,10 @@ function isLikelyInstructionLine(line) {
 
   if (isInstructionHeading(normalizedLine)) {
     return true;
+  }
+
+  if (looksLikeIngredientList(normalizedLine)) {
+    return false;
   }
 
   return COOKING_VERB_PATTERN.test(normalizedLine);
@@ -286,6 +316,40 @@ function extractIngredients(lines) {
   return dedupeIngredients(ingredients);
 }
 
+function extractTitle(lines) {
+  for (const line of lines.slice(0, 6)) {
+    const normalizedLine = stripListMarker(line).trim();
+
+    if (!normalizedLine) {
+      continue;
+    }
+
+    const titleMatch = normalizedLine.match(TITLE_PREFIX_PATTERN);
+
+    if (titleMatch?.[1]?.trim()) {
+      return titleMatch[1].trim();
+    }
+
+    if (
+      isIngredientHeading(normalizedLine) ||
+      isInstructionHeading(normalizedLine) ||
+      /^\d+(?:\.\d+)?\s*(?:인분|servings?)$/i.test(normalizedLine)
+    ) {
+      continue;
+    }
+
+    if (
+      !isLikelyIngredientLine(normalizedLine) &&
+      !isLikelyInstructionLine(normalizedLine) &&
+      normalizedLine.length <= 60
+    ) {
+      return normalizedLine;
+    }
+  }
+
+  return "";
+}
+
 function findInstructionSection(text) {
   const headingMatch = text.match(
     /(?:^|\n)\s*(?:만드는 ?법|조리 ?순서|조리법|방법|instructions?|directions?|steps?)\s*[:/-]?\s*/i,
@@ -394,6 +458,7 @@ export function parseRecipeText(rawText) {
 
   if (!normalizedText) {
     return {
+      title: "",
       ingredients: [],
       instructions: [],
       formattedText: "",
@@ -407,6 +472,7 @@ export function parseRecipeText(rawText) {
     findInstructionSectionFromLines(lines);
 
   return {
+    title: extractTitle(lines),
     ingredients,
     instructions: splitInstructions(instructionSection),
     formattedText: normalizedText,
